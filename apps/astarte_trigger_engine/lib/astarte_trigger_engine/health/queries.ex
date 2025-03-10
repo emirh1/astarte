@@ -19,17 +19,22 @@
 defmodule Astarte.TriggerEngine.Health.Queries do
   alias Astarte.TriggerEngine.Config
   alias Astarte.Core.CQLUtils
+  alias Astarte.TriggerEngine.Realms
+  alias Astarte.TriggerEngine.Repo
   require Logger
 
-  def get_astarte_health(consistency) do
-    query = """
-    SELECT COUNT(*)
-    FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms
-    """
+  import Ecto.Query
 
-    with {:ok, %Xandra.Page{} = page} <-
-           Xandra.Cluster.execute(:xandra, query, %{}, consistency: consistency),
-         {:ok, _} <- Enum.fetch(page, 0) do
+  def get_astarte_health(consistency) do
+    keyspace_name =
+      CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())
+
+    query =
+      from r in Realms,
+        prefix: ^keyspace_name,
+        select: count(r.realm_name)
+
+    with count when count != nil <- Repo.one!(query, consistency: consistency) do
       :ok
     else
       :error ->

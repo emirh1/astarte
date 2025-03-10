@@ -19,25 +19,25 @@
 defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
   alias Astarte.Core.CQLUtils
   alias Astarte.TriggerEngine.Config
+  alias Astarte.TriggerEngine.KvStore
+  alias Astarte.TriggerEngine.Realms
+  alias Astarte.TriggerEngine.Repo
   require Logger
 
-  def list_policies(realm_name) do
-    Xandra.Cluster.run(:xandra, &do_list_policies(&1, realm_name))
-  end
+  import Ecto.Query
 
-  defp do_list_policies(conn, realm_name) do
+  def list_policies(realm_name) do
     keyspace_name =
       CQLUtils.realm_name_to_keyspace_name(realm_name, Config.astarte_instance_id!())
 
-    list_policies_statement =
-      "SELECT * FROM #{keyspace_name}.kv_store WHERE group='trigger_policy';"
+    query =
+      from k in KvStore,
+        prefix: ^keyspace_name,
+        where: k.group == "trigger_policy",
+        select: k
 
-    with {:ok, prepared} <-
-           Xandra.prepare(conn, list_policies_statement),
-         {:ok, %Xandra.Page{} = page} <-
-           Xandra.execute(conn, prepared, %{}),
-         policy_list <- Enum.map(page, &extract_name_and_data/1) do
-      {:ok, policy_list}
+    with policies when is_list(policies) <- Repo.all(query) do
+      {:ok, Enum.map(policies, &extract_name_and_data/1)}
     else
       {:error, %Xandra.Error{} = err} ->
         _ = Logger.warning("Database error: #{inspect(err)}.", tag: "database_error")
@@ -54,19 +54,17 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
   end
 
   def list_realms do
-    Xandra.Cluster.run(:xandra, &do_list_realms/1)
-  end
+    keyspace_name =
+      CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())
 
-  def do_list_realms(conn) do
-    query = """
-    SELECT realm_name
-    FROM #{CQLUtils.realm_name_to_keyspace_name("astarte", Config.astarte_instance_id!())}.realms;
-    """
+    query =
+      from r in Realms,
+        prefix: ^keyspace_name,
+        select: r.realm_name
 
-    case Xandra.execute(conn, query, %{}, consistency: :quorum) do
-      {:ok, %Xandra.Page{} = page} ->
-        {:ok, Enum.map(page, &extract_realm_name/1)}
-
+    with realms <- Repo.all(query) do
+      {:ok, realms}
+    else
       {:error, %Xandra.Error{} = err} ->
         _ =
           Logger.warning("Database error while listing realms: #{inspect(err)}.",
@@ -85,7 +83,7 @@ defmodule Astarte.TriggerEngine.AMQPConsumer.Queries do
     end
   end
 
-  defp extract_name_and_data(%{"key" => name, "value" => data}) do
+  defp extract_name_and_data(%KvStore{key: name, value: data}) do
     {name, data}
   end
 

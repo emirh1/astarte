@@ -18,33 +18,34 @@
 
 defmodule Astarte.TriggerEngine.Policy.Queries do
   alias Astarte.Core.CQLUtils
+  alias Astarte.Core.Realm
   alias Astarte.TriggerEngine.Config
+  alias Astarte.TriggerEngine.KvStore
+  alias Astarte.TriggerEngine.Repo
+
   require Logger
 
-  alias Astarte.Core.Realm
+  import Ecto.Query
 
   def retrieve_policy_data(realm_name, policy_name) do
     with :ok <- verify_realm_name(realm_name),
          {:ok, policy} <-
-           Xandra.Cluster.run(:xandra, fn conn ->
-             do_retrieve_policy_data(conn, realm_name, policy_name)
-           end) do
+           do_retrieve_policy_data(realm_name, policy_name) do
       {:ok, policy}
     end
   end
 
-  defp do_retrieve_policy_data(conn, realm_name, policy_name) do
+  defp do_retrieve_policy_data(realm_name, policy_name) do
     keyspace_name =
       CQLUtils.realm_name_to_keyspace_name(realm_name, Config.astarte_instance_id!())
 
-    retrieve_statement =
-      "SELECT value FROM #{keyspace_name}.kv_store WHERE group='trigger_policy' AND key=:policy_name;"
+    query =
+      from k in KvStore,
+        prefix: ^keyspace_name,
+        where: k.group == "trigger_policy" and k.key == ^policy_name,
+        select: k.value
 
-    with {:ok, prepared} <-
-           Xandra.prepare(conn, retrieve_statement),
-         {:ok, %Xandra.Page{} = page} <-
-           Xandra.execute(conn, prepared, %{"policy_name" => policy_name}),
-         [%{"value" => policy}] <- Enum.to_list(page) do
+    with policy when policy != nil <- Repo.one!(query) do
       {:ok, policy}
     else
       {:error, %Xandra.Error{} = err} ->
